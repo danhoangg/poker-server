@@ -1,0 +1,2 @@
+pokerkit>=0.5.0
+websockets>=13.0

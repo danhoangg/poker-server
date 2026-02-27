@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import json
 import logging
+import ssl
 
 import websockets
 
@@ -44,7 +45,12 @@ def fmt_cards(cards: list[str]) -> str:
 class HumanBot:
     def __init__(self, name: str, host: str = "localhost", port: int = 8765) -> None:
         self.name = name
-        self.uri = f"ws://{host}:{port}"
+        if host.startswith("ws://") or host.startswith("wss://"):
+            self.uri = host
+        elif port == 443:
+            self.uri = f"wss://{host}"
+        else:
+            self.uri = f"ws://{host}:{port}"
         self.log = logging.getLogger(f"bot.{name}")
         self.my_seat: int | None = None
 
@@ -54,7 +60,12 @@ class HumanBot:
 
     async def run(self) -> None:
         self.log.info("Connecting to %s as '%s'", self.uri, self.name)
-        async with websockets.connect(self.uri) as ws:
+        ssl_ctx = None
+        if self.uri.startswith("wss://"):
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.check_hostname = False
+            ssl_ctx.verify_mode = ssl.CERT_NONE
+        async with websockets.connect(self.uri, ssl=ssl_ctx) as ws:
             await ws.send(json.dumps({"type": "join", "name": self.name}))
             self.log.info("Joined. Waiting for tournament...")
 

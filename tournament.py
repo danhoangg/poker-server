@@ -24,6 +24,8 @@ from protocol import (
     ERR_BAD_NAME,
     ERR_TOURNAMENT_FULL,
     ERR_TOURNAMENT_STARTED,
+    ERR_BAD_ACTION,
+    ACTION_RAISE,
 )
 
 log = logging.getLogger("algopoker.tournament")
@@ -228,14 +230,19 @@ class TournamentManager:
             actor_seat = hand.actor_seat
             actor_player = active[actor_pk]
 
+            # Capture valid actions for this actor before broadcasting.
+            # These are the exact same actions embedded in the game_state below,
+            # and are used to validate the bot's response.
+            valid_actions = hand.get_valid_actions()
+
             # Send personalized action_request to every active player
             await self._broadcast_personalized(
                 active,
                 lambda p: build_action_request(actor_seat, hand.get_game_state(p.seat_index)),
             )
 
-            # Wait for actor's action (with timeout)
-            action_type, amount, timed_out = await self._get_action(actor_player)
+            # Wait for actor's action (with timeout and server-side validation)
+            action_type, amount, timed_out = await self._get_action(actor_player, valid_actions)
 
             # Apply action
             hand.apply_action(action_type, amount)
@@ -282,12 +289,18 @@ class TournamentManager:
     # ------------------------------------------------------------------
 
     async def _get_action(
-        self, player: PlayerInfo
+        self, player: PlayerInfo, valid_actions: list[dict]
     ) -> tuple[str, int | None, bool]:
         """
-        Wait for the player to submit an action, with timeout.
+        Wait for the player to submit an action, validate it, and return it.
         Returns (action_type, amount, timed_out).
-        Auto-folds on timeout or disconnect.
+        Auto-folds on timeout, disconnect, or an action that fails validation.
+
+        Validation rules:
+          - action.type must be a string present in valid_actions
+          - raise must include a numeric amount; it is clamped to [min, max]
+            (per protocol: "clamped server-side, so a slightly off value won't
+            be rejected"), but a missing or non-numeric amount is rejected
         """
         # Drain stale messages before waiting
         while not player.action_queue.empty():
@@ -306,15 +319,50 @@ class TournamentManager:
             log.info("Player '%s' disconnected — auto-folding.", player.name)
             return "fold", None, True
 
+        # --- Parse ---
         try:
-            action = msg.get("action", {})
-            action_type = action.get("type", "fold")
-            amount = action.get("amount")
-            if amount is not None:
-                amount = int(amount)
-            return action_type, amount, False
+            action     = msg.get("action", {})
+            action_type = str(action.get("type", ""))
+            raw_amount  = action.get("amount")
+            amount      = int(raw_amount) if raw_amount is not None else None
         except (AttributeError, ValueError, TypeError):
+            log.warning("Player '%s' sent malformed action — auto-folding.", player.name)
+            await player.send(build_error(ERR_BAD_ACTION, "Malformed action object."))
             return "fold", None, True
+
+        # --- Validate action type ---
+        valid_types = {a["type"] for a in valid_actions}
+        if action_type not in valid_types:
+            err = (
+                f"Action type {action_type!r} is not valid. "
+                f"Valid types right now: {sorted(valid_types)}."
+            )
+            log.warning("Player '%s' sent invalid action type %r — auto-folding.", player.name, action_type)
+            await player.send(build_error(ERR_BAD_ACTION, err))
+            return "fold", None, True
+
+        # --- Validate raise amount ---
+        if action_type == ACTION_RAISE:
+            raise_info = next(a for a in valid_actions if a["type"] == ACTION_RAISE)
+            min_r = raise_info["min_amount"]
+            max_r = raise_info["max_amount"]
+
+            if amount is None:
+                err = f"Raise requires an 'amount'. Valid range: [{min_r}, {max_r}]."
+                log.warning("Player '%s' sent raise with no amount — auto-folding.", player.name)
+                await player.send(build_error(ERR_BAD_ACTION, err))
+                return "fold", None, True
+
+            # Clamp to valid range per protocol spec
+            if not (min_r <= amount <= max_r):
+                clamped = max(min_r, min(max_r, amount))
+                log.info(
+                    "Player '%s' raise amount %d clamped to %d (valid range [%d, %d]).",
+                    player.name, amount, clamped, min_r, max_r,
+                )
+                amount = clamped
+
+        return action_type, amount, False
 
     # ------------------------------------------------------------------
     # Broadcast helpers

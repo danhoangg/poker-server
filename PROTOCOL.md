@@ -261,6 +261,7 @@ Sent when something goes wrong. The connection is closed after registration erro
 | `TOURNAMENT_STARTED`  | Tournament already in progress                   | Closed     |
 | `BAD_JSON`            | Message is not valid JSON                        | Open       |
 | `UNKNOWN_TYPE`        | Unrecognised `"type"` field                      | Open       |
+| `BAD_ACTION`          | Action type not in `valid_actions`, or `raise` missing/non-integer `amount` | Open — auto-fold applied |
 
 ---
 

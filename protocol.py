@@ -45,6 +45,7 @@ ERR_TOURNAMENT_FULL   = "TOURNAMENT_FULL"
 ERR_TOURNAMENT_STARTED = "TOURNAMENT_STARTED"
 ERR_BAD_JSON          = "BAD_JSON"
 ERR_UNKNOWN_TYPE      = "UNKNOWN_TYPE"
+ERR_BAD_ACTION        = "BAD_ACTION"
 
 
 def build_waiting(current_count: int, min_players: int, max_players: int) -> dict:

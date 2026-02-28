@@ -131,6 +131,7 @@ def build_hand_end(
     hand_number: int,
     winners: list[dict],
     hole_cards_revealed: list[dict],
+    community_cards: list[str],
     final_stacks: list[int],
     player_names: list[str],
     eliminated_seats: list[int],
@@ -138,12 +139,14 @@ def build_hand_end(
     """
     winners: [{"seat": int, "name": str, "amount_won": int}]
     hole_cards_revealed: [{"seat": int, "name": str, "hole_cards": ["As","Kd"]}]
+    community_cards: the full board at hand end, e.g. ["Jc","3d","5c","9h","2s"]
     """
     return {
         "type": MSG_HAND_END,
         "hand_number": hand_number,
         "winners": winners,
         "hole_cards_revealed": hole_cards_revealed,
+        "community_cards": community_cards,
         "final_stacks": final_stacks,
         "player_names": player_names,
         "eliminated_seats": eliminated_seats,

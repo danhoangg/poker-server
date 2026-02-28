@@ -126,6 +126,19 @@ class PokerHand:
             mode=Mode.TOURNAMENT,
         )
 
+        # Snapshot hole cards immediately after dealing (HOLE_DEALING automation
+        # already ran inside create_state). Stored so get_hand_result() can reveal
+        # ALL showdown participants' cards, even if HOLE_CARDS_SHOWING_OR_MUCKING
+        # automation mucked the loser's hand.
+        self._dealt_hole_cards: dict[int, list[str]] = {
+            pk_i: [repr(c) for c in self.state.hole_cards[pk_i]]
+            for pk_i in range(n)
+        }
+
+        # Updated at the START of every apply_action() call so that when the hand
+        # ends (automations fire mid-call) we still know who was active going in.
+        self._active_before_last_action: list[int] = list(range(n))
+
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
@@ -166,6 +179,13 @@ class PokerHand:
         For 'raise', amount is clamped to [min, max] so invalid amounts
         are silently corrected rather than errored.
         """
+        # Record active players BEFORE calling PokerKit. After the call,
+        # automations may have run and statuses will already be updated.
+        self._active_before_last_action = [
+            pk_i for pk_i in range(len(self.active_players))
+            if bool(self.state.statuses[pk_i])
+        ]
+
         if action_type == ACTION_FOLD:
             self.state.fold()
         elif action_type in (ACTION_CHECK, ACTION_CALL):
@@ -314,12 +334,14 @@ class PokerHand:
 
     def get_hand_result(self) -> dict:
         """
-        After is_over is True, return winners, hole cards, and final stacks.
+        After is_over is True, return winners, revealed hole cards, community
+        cards, and final stacks.
         """
         state = self.state
-        winners = []
-        hole_cards_revealed = []
+        n = len(self.active_players)
 
+        # Winners: players whose net payoff is positive.
+        winners = []
         for pk_i, player in enumerate(self.active_players):
             payoff = int(state.payoffs[pk_i])
             if payoff > 0:
@@ -328,20 +350,42 @@ class PokerHand:
                     "name": player.name,
                     "amount_won": payoff,
                 })
-            raw_cards = state.hole_cards[pk_i]
-            if raw_cards:
-                hole_cards_revealed.append({
-                    "seat": player.seat_index,
-                    "name": player.name,
-                    "hole_cards": [repr(c) for c in raw_cards],
-                })
 
-        # Final stacks from PokerKit (after CHIPS_PULLING automation)
-        final_stacks_by_pk = [int(state.stacks[i]) for i in range(len(self.active_players))]
+        # Showdown detection: with HOLE_CARDS_SHOWING_OR_MUCKING automation,
+        # PokerKit leaves at least one player's hole_cards non-empty when cards
+        # were tabled. When the hand was won by everyone folding, all hole_cards
+        # are mucked (empty tuples), so the generator is falsy.
+        showdown_occurred = any(state.hole_cards[pk_i] for pk_i in range(n))
+
+        if showdown_occurred:
+            # Reveal the originally-dealt cards for every player who was still
+            # in the hand when the final action was taken. This overrides the
+            # automation's muck/show decision so ALL showdown hands are visible.
+            hole_cards_revealed = [
+                {
+                    "seat": self.active_players[pk_i].seat_index,
+                    "name": self.active_players[pk_i].name,
+                    "hole_cards": self._dealt_hole_cards[pk_i],
+                }
+                for pk_i in self._active_before_last_action
+            ]
+        else:
+            hole_cards_revealed = []
+
+        # Community cards at hand end (same flattening logic as get_game_state).
+        community_cards = [
+            repr(card)
+            for sublist in state.board_cards
+            for card in sublist
+        ]
+
+        # Final stacks from PokerKit (after CHIPS_PULLING automation).
+        final_stacks_by_pk = [int(state.stacks[i]) for i in range(n)]
 
         return {
             "winners": winners,
             "hole_cards_revealed": hole_cards_revealed,
+            "community_cards": community_cards,
             "final_stacks_by_pk": final_stacks_by_pk,
         }
 

@@ -56,6 +56,49 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message
 #   {"type": "call",  "amount": 200}
 #   {"type": "raise", "min_amount": 400, "max_amount": 9500}
 
+def user_action(actor_seat: int, action: dict, game_state: dict) -> None:
+    """
+    Called after EVERY player's action so you can track the full betting history.
+
+    Use this to build a record of what each player did on each street —
+    essential for any strategy that involves reading opponents or replaying hands.
+
+    actor_seat — which seat just acted (0-indexed, permanent for the tournament)
+    action     — what they did:
+        action["type"]   - "fold" / "check" / "call" / "raise"
+        action["amount"] - chips for call/raise; None for fold/check
+    game_state — full board state AFTER this action was applied, including
+                 updated stacks, pot, community cards, and remaining players
+    """
+    print(f'actor_seat: {actor_seat}')
+    print(f'action: {action}')
+    pass  # Replace with your action-tracking / history-building logic
+
+
+def showdown_cards(revealed: list[dict], community_cards: list[str]) -> None:
+    """
+    Called at hand_end when opponents' hole cards are revealed at showdown.
+
+    This is the ONLY place you see other players' dealt cards — during the
+    hand they appear as ["??","??"] in game_state.  Use this data to build a
+    hand-reading model: you can correlate each opponent's betting line across
+    all streets with the two cards they were holding.
+
+    revealed — one entry per showdown participant:
+        {
+            "seat":       int,        # permanent tournament seat
+            "name":       str,
+            "hole_cards": ["As","Kd"] # their actual dealt cards
+        }
+
+    community_cards — the full board at hand end, e.g. ["Jc","3d","5c","9h","2s"]
+        (empty list if the hand ended before the river)
+    """
+    print(f'revealed: {revealed}')
+    print(f'community cards: {community_cards}')
+    pass  # Replace with your hand-reading / training logic
+
+
 def decide_action(game_state: dict, my_seat: int) -> dict:
     """
     This function will run everytime it is your go.
@@ -262,12 +305,19 @@ class ExampleBot:
             action["type"], amount_str, timeout_str,
         )
 
+        # Fire user_action() for every player's action so you can build a
+        # full betting history for the hand — opponent reads, pattern detection, etc.
+        user_action(msg["actor_seat"], action, msg["game_state"])
+
     def _on_hand_end(self, msg: dict) -> None:
         """
         Sent when a hand finishes (everyone folded to one player, or showdown).
 
-        winners — who won chips and how much (net gain, not total pot).
-        hole_cards_revealed — the cards of players who went to showdown.
+        winners          — who won chips and how much (net gain, not total pot).
+        hole_cards_revealed — all showdown participants' actual dealt cards.
+                           Empty list if the hand was won without a showdown.
+        community_cards  — the full board at hand end (may be < 5 cards if
+                           the hand ended early e.g. everyone folded preflop).
         eliminated_seats — seats that busted out this hand (stack hit 0).
         """
         for winner in msg["winners"]:
@@ -277,11 +327,16 @@ class ExampleBot:
             )
 
         if msg.get("hole_cards_revealed"):
-            revealed = ", ".join(
+            board = msg.get("community_cards", [])
+            revealed_str = ", ".join(
                 f"{p['name']}: {p['hole_cards']}"
                 for p in msg["hole_cards_revealed"]
             )
-            self.log.info("  Showdown — %s", revealed)
+            self.log.info("  Showdown | Board: %s | %s", board, revealed_str)
+
+            # Fire the showdown_cards() callback so your bot can learn from
+            # opponents' hands.  This is the only time you see their cards.
+            showdown_cards(msg["hole_cards_revealed"], board)
 
         if msg.get("eliminated_seats"):
             self.log.info("  Eliminated seats: %s", msg["eliminated_seats"])

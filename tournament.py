@@ -279,6 +279,7 @@ class TournamentManager:
             hand_number=self.hand_number,
             winners=result["winners"],
             hole_cards_revealed=result["hole_cards_revealed"],
+            community_cards=result["community_cards"],
             final_stacks=all_stacks,
             player_names=all_names,
             eliminated_seats=newly_eliminated,

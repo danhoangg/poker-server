@@ -70,8 +70,6 @@ def user_action(actor_seat: int, action: dict, game_state: dict) -> None:
     game_state — full board state AFTER this action was applied, including
                  updated stacks, pot, community cards, and remaining players
     """
-    print(f'actor_seat: {actor_seat}')
-    print(f'action: {action}')
     pass  # Replace with your action-tracking / history-building logic
 
 
@@ -94,9 +92,27 @@ def showdown_cards(revealed: list[dict], community_cards: list[str]) -> None:
     community_cards — the full board at hand end, e.g. ["Jc","3d","5c","9h","2s"]
         (empty list if the hand ended before the river)
     """
-    print(f'revealed: {revealed}')
-    print(f'community cards: {community_cards}')
     pass  # Replace with your hand-reading / training logic
+
+
+def hand_end(hand_number: int, winners: list[dict], my_seat: int) -> None:
+    """
+    Called at the end of every hand so you can reset per-hand state.
+
+    Use this to clear any variables you built up during the hand —
+    betting history, street trackers, action counts, etc. — so they
+    start fresh for the next hand.
+
+    hand_number — which hand just finished (1-indexed)
+    winners     — list of winners, each entry:
+        {
+            "seat":       int,
+            "name":       str,
+            "amount_won": int   # net chips gained this hand
+        }
+    my_seat     — your permanent seat index
+    """
+    pass  # Reset your per-hand tracking variables here
 
 
 def decide_action(game_state: dict, my_seat: int) -> dict:
@@ -340,6 +356,9 @@ class ExampleBot:
 
         if msg.get("eliminated_seats"):
             self.log.info("  Eliminated seats: %s", msg["eliminated_seats"])
+
+        # Give the bot a chance to reset per-hand state before the next hand.
+        hand_end(msg["hand_number"], msg["winners"], self.my_seat)
 
     def _on_game_end(self, msg: dict) -> None:
         """

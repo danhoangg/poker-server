@@ -29,8 +29,10 @@ MSG_GAME_END       = "game_end"
 MSG_ERROR          = "error"
 
 # --- Bot -> Server message types ---
-MSG_JOIN   = "join"
-MSG_ACTION = "action"
+MSG_JOIN     = "join"
+MSG_ACTION   = "action"
+MSG_SPECTATE = "spectate"   # join as a read-only observer
+MSG_START    = "start"      # spectator → server: force-start the tournament now
 
 # --- Action type strings ---
 ACTION_FOLD  = "fold"

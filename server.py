@@ -21,6 +21,8 @@ import config
 from protocol import (
     MSG_ACTION,
     MSG_JOIN,
+    MSG_SPECTATE,
+    MSG_START,
     ERR_BAD_JOIN,
     ERR_BAD_NAME,
     ERR_BAD_JSON,
@@ -62,7 +64,36 @@ async def handle_connection(websocket: ServerConnection) -> None:
             await _send_error(websocket, ERR_BAD_JOIN, "Expected JSON 'join' message.")
             return
 
-        if not isinstance(msg, dict) or msg.get("type") != MSG_JOIN:
+        if not isinstance(msg, dict):
+            await _send_error(websocket, ERR_BAD_JOIN, "First message must be a JSON object.")
+            return
+
+        msg_type = msg.get("type")
+
+        # ----------------------------------------------------------------
+        # Spectator path
+        # ----------------------------------------------------------------
+        if msg_type == MSG_SPECTATE:
+            spectator = await tournament.register_spectator(websocket)
+            try:
+                async for raw_msg in websocket:
+                    try:
+                        m = json.loads(raw_msg)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(m, dict) and m.get("type") == MSG_START:
+                        await tournament.force_start()
+            except websockets.exceptions.ConnectionClosed:
+                pass
+            finally:
+                tournament.remove_spectator(spectator)
+                log.info("Spectator connection closed: %s", remote)
+            return
+
+        # ----------------------------------------------------------------
+        # Player path — expect a 'join' message
+        # ----------------------------------------------------------------
+        if msg_type != MSG_JOIN:
             await _send_error(websocket, ERR_BAD_JOIN, "First message must be {\"type\": \"join\", \"name\": \"...\"}.")
             return
 

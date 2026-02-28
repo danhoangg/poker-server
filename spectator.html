@@ -1,0 +1,804 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AlgoPoker Spectator</title>
+<style>
+  /* ── Reset & base ─────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ── Header bar ───────────────────────────────────────────── */
+  #header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 8px 16px;
+    background: #16213e;
+    border-bottom: 1px solid #0f3460;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+  }
+  #header h1 { font-size: 1.1rem; font-weight: 700; color: #e94560; letter-spacing: 1px; }
+  .badge {
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    background: #0f3460;
+  }
+  #badge-status { background: #c0392b; }
+  #badge-status.connected { background: #27ae60; }
+  #badge-hand, #badge-street, #badge-blinds { background: #0f3460; }
+  #queue-count { font-size: 0.75rem; color: #888; margin-left: auto; }
+
+  /* ── Main layout ──────────────────────────────────────────── */
+  #main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ── Action log (left) ────────────────────────────────────── */
+  #log-panel {
+    width: 210px;
+    min-width: 170px;
+    background: #16213e;
+    border-right: 1px solid #0f3460;
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+  }
+  #log-panel h2 { font-size: 0.8rem; padding: 8px 10px; color: #888; text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid #0f3460; }
+  #action-log {
+    flex: 1;
+    overflow-y: auto;
+    padding: 6px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 0.78rem;
+  }
+  .log-entry { padding: 3px 6px; border-radius: 4px; background: #0f1b35; }
+  .log-entry .actor { font-weight: 700; color: #a8d8ea; }
+  .log-entry .act-fold  { color: #e74c3c; }
+  .log-entry .act-check { color: #2ecc71; }
+  .log-entry .act-call  { color: #f39c12; }
+  .log-entry .act-raise { color: #9b59b6; }
+  .log-entry .act-timeout { color: #888; font-style: italic; }
+  .log-divider { border-top: 1px solid #0f3460; margin: 4px 0; font-size: 0.7rem; color: #555; padding-top: 3px; }
+
+  /* ── Table canvas (center) ────────────────────────────────── */
+  #table-panel {
+    flex: 1;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+
+  /* Oval felt table */
+  #felt {
+    position: relative;
+    width: min(680px, 90vw);
+    height: min(380px, 52vw);
+    background: radial-gradient(ellipse at center, #1e7a3d 60%, #155a2d);
+    border-radius: 50%;
+    border: 8px solid #6b3a1f;
+    box-shadow: 0 0 40px rgba(0,0,0,0.6), inset 0 0 60px rgba(0,0,0,0.3);
+    flex-shrink: 0;
+  }
+
+  /* Community cards + pot, centered in felt */
+  #center-area {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+  }
+  #community-cards { display: flex; gap: 5px; min-height: 65px; align-items: center; justify-content: center; }
+  #pot-display { font-size: 0.85rem; font-weight: 600; color: #ffe066; text-shadow: 0 1px 3px rgba(0,0,0,0.6); }
+  #side-pots { font-size: 0.7rem; color: #ccc; text-align: center; }
+
+  /* Player seats — absolutely positioned around the ellipse */
+  .seat {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    transform: translate(-50%, -50%);
+    transition: opacity 0.3s;
+  }
+  .seat.folded { opacity: 0.45; }
+  .seat.active-actor .seat-box { box-shadow: 0 0 14px 4px #ffe066; }
+
+  .seat-box {
+    background: #16213e;
+    border: 2px solid #0f3460;
+    border-radius: 8px;
+    padding: 5px 8px;
+    min-width: 90px;
+    text-align: center;
+  }
+  .seat-box.dealer-button { border-color: #f39c12; }
+
+  .seat-name { font-size: 0.72rem; font-weight: 700; color: #a8d8ea; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 90px; }
+  .seat-stack { font-size: 0.7rem; color: #2ecc71; }
+  .seat-bet   { font-size: 0.68rem; color: #f39c12; min-height: 14px; }
+  .seat-role  { font-size: 0.6rem; color: #888; }
+  .seat-cards { display: flex; gap: 3px; justify-content: center; margin-top: 2px; }
+  .seat-allin { font-size: 0.6rem; color: #e74c3c; font-weight: 700; }
+
+  /* ── Playing cards ────────────────────────────────────────── */
+  .card {
+    width: 36px;
+    height: 52px;
+    border-radius: 5px;
+    border: 1px solid #aaa;
+    background: white;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: flex-start;
+    padding: 2px 3px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    line-height: 1.1;
+    user-select: none;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+  }
+  .card.red  { color: #c0392b; }
+  .card.black { color: #1a1a1a; }
+  .card.back {
+    background: repeating-linear-gradient(
+      45deg, #1a237e, #1a237e 4px, #283593 4px, #283593 8px
+    );
+    border-color: #3949ab;
+  }
+  .card.community {
+    width: 42px;
+    height: 60px;
+    font-size: 0.82rem;
+  }
+  .card-suit { font-size: 0.9em; }
+
+  /* ── Controls (right) ─────────────────────────────────────── */
+  #controls-panel {
+    width: 190px;
+    min-width: 160px;
+    background: #16213e;
+    border-left: 1px solid #0f3460;
+    padding: 14px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    flex-shrink: 0;
+    overflow-y: auto;
+  }
+  #controls-panel h2 { font-size: 0.8rem; color: #888; text-transform: uppercase; letter-spacing: 1px; }
+
+  .ctrl-group { display: flex; flex-direction: column; gap: 6px; }
+  .ctrl-row   { display: flex; gap: 6px; }
+
+  button {
+    padding: 7px 10px;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    background: #0f3460;
+    color: #e0e0e0;
+    transition: background 0.15s;
+    flex: 1;
+  }
+  button:hover  { background: #154880; }
+  button:active { background: #0a2540; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  button.primary { background: #27ae60; }
+  button.primary:hover { background: #2ecc71; color: #111; }
+  button.danger  { background: #c0392b; }
+  button.danger:hover { background: #e74c3c; }
+
+  label.slider-label { font-size: 0.75rem; color: #aaa; display: flex; justify-content: space-between; }
+  input[type=range] { width: 100%; accent-color: #e94560; }
+
+  #lobby-section { border-top: 1px solid #0f3460; padding-top: 10px; }
+  #lobby-info { font-size: 0.75rem; color: #aaa; }
+
+  /* ── Overlay messages ─────────────────────────────────────── */
+  #overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.75);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+  #overlay.hidden { display: none; }
+  #overlay-box {
+    background: #16213e;
+    border: 2px solid #e94560;
+    border-radius: 12px;
+    padding: 30px 40px;
+    text-align: center;
+    max-width: 400px;
+  }
+  #overlay-box h2 { font-size: 1.4rem; color: #e94560; margin-bottom: 10px; }
+  #overlay-box p  { color: #aaa; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div id="header">
+  <h1>AlgoPoker Spectator</h1>
+  <span class="badge" id="badge-status">Disconnected</span>
+  <span class="badge" id="badge-hand">Hand —</span>
+  <span class="badge" id="badge-street">—</span>
+  <span class="badge" id="badge-blinds">Blinds —/—</span>
+  <span id="queue-count">0 events queued</span>
+</div>
+
+<!-- Main area -->
+<div id="main">
+
+  <!-- Action log -->
+  <div id="log-panel">
+    <h2>Action Log</h2>
+    <div id="action-log"></div>
+  </div>
+
+  <!-- Poker table -->
+  <div id="table-panel">
+    <div id="felt">
+      <div id="center-area">
+        <div id="community-cards"></div>
+        <div id="pot-display">Pot: —</div>
+        <div id="side-pots"></div>
+      </div>
+      <!-- Player seats injected by JS -->
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <div id="controls-panel">
+    <h2>Playback</h2>
+    <div class="ctrl-group">
+      <div class="ctrl-row">
+        <button id="btn-play" class="primary">&#9654; Play</button>
+        <button id="btn-step">&#9654;| Step</button>
+      </div>
+      <button id="btn-pause" class="danger">&#9646;&#9646; Pause</button>
+    </div>
+
+    <div class="ctrl-group">
+      <label class="slider-label">
+        <span>Speed</span>
+        <span id="speed-val">500 ms</span>
+      </label>
+      <input type="range" id="speed-slider" min="0" max="3000" step="50" value="500">
+    </div>
+
+    <div id="lobby-section" class="ctrl-group">
+      <h2>Lobby</h2>
+      <div id="lobby-info">Waiting for connection...</div>
+      <button id="btn-start" class="primary" disabled>&#9654; Start Tournament</button>
+    </div>
+
+    <div class="ctrl-group" style="margin-top:auto; border-top:1px solid #0f3460; padding-top:10px;">
+      <label class="slider-label"><span>Server</span></label>
+      <input id="server-url" type="text" value="ws://localhost:8765"
+        style="background:#0f1b35;border:1px solid #0f3460;color:#e0e0e0;padding:4px 6px;border-radius:4px;font-size:0.78rem;width:100%;">
+      <button id="btn-connect">Connect</button>
+    </div>
+  </div>
+
+</div>
+
+<!-- Winner overlay -->
+<div id="overlay" class="hidden">
+  <div id="overlay-box">
+    <h2 id="overlay-title">Tournament Over</h2>
+    <p id="overlay-body"></p>
+  </div>
+</div>
+
+<script>
+// =============================================================================
+// State
+// =============================================================================
+const state = {
+  players: {},          // seat -> {name, stack, holeCards, isActive, isAllIn, bet,
+                        //          isDealer, isSB, isBB}
+  communityCards: [],
+  pot: 0,
+  sidePots: [],
+  street: '',
+  handNumber: 0,
+  actorSeat: null,
+  sb: 50,
+  bb: 100,
+  totalPlayers: 0,
+  minPlayers: 2,
+  maxPlayers: 9,
+  currentPlayers: 0,
+  gameStarted: false,
+};
+
+// =============================================================================
+// Event queue / playback
+// =============================================================================
+const eventQueue = [];
+let paused = false;
+let delay = 500;
+let timer = null;
+
+function startTimer() {
+  if (timer) clearInterval(timer);
+  timer = setInterval(() => {
+    if (!paused && eventQueue.length > 0) processNext();
+  }, Math.max(delay, 16));
+}
+
+function processNext() {
+  const msg = eventQueue.shift();
+  if (msg) handleMessage(msg);
+  updateQueueCount();
+}
+
+// =============================================================================
+// WebSocket
+// =============================================================================
+let ws = null;
+
+function connect(url) {
+  if (ws) { ws.onclose = null; ws.close(); }
+  setStatus('Connecting…', false);
+  ws = new WebSocket(url);
+
+  ws.onopen = () => {
+    setStatus('Connected', true);
+    ws.send(JSON.stringify({type: 'spectate'}));
+    startTimer();
+  };
+
+  ws.onmessage = (e) => {
+    eventQueue.push(JSON.parse(e.data));
+    updateQueueCount();
+  };
+
+  ws.onclose = () => {
+    setStatus('Disconnected', false);
+    if (timer) { clearInterval(timer); timer = null; }
+  };
+
+  ws.onerror = () => setStatus('Error', false);
+}
+
+// =============================================================================
+// Message handlers
+// =============================================================================
+function handleMessage(msg) {
+  const h = handlers[msg.type];
+  if (h) h(msg);
+}
+
+const handlers = {
+  waiting(msg) {
+    state.currentPlayers = msg.current_players;
+    state.minPlayers = msg.min_players;
+    state.maxPlayers = msg.max_players;
+    updateLobbyUI();
+  },
+
+  game_start(msg) {
+    state.gameStarted = true;
+    state.sb = msg.small_blind;
+    state.bb = msg.big_blind;
+    state.players = {};
+    msg.player_names.forEach((name, i) => {
+      state.players[i] = {
+        name, stack: msg.starting_stacks[i], holeCards: [], isActive: true,
+        isAllIn: false, bet: 0, isDealer: false, isSB: false, isBB: false,
+      };
+    });
+    hideLobby();
+    buildSeats();
+    renderAll();
+  },
+
+  hand_start(msg) {
+    state.handNumber = msg.hand_number;
+    state.sb = msg.small_blind_amount;
+    state.bb = msg.big_blind_amount;
+    state.communityCards = [];
+    state.pot = 0;
+    state.sidePots = [];
+    state.actorSeat = null;
+
+    // Reset per-hand player state; stacks come from the message
+    const names = msg.player_names;
+    names.forEach((name, idx) => {
+      // find seat by name
+      const seat = Object.keys(state.players).find(s => state.players[s].name === name);
+      if (seat !== undefined) {
+        const p = state.players[seat];
+        p.stack = msg.stacks[idx];
+        p.holeCards = [];
+        p.isActive = true;
+        p.isAllIn = false;
+        p.bet = 0;
+      }
+    });
+
+    // Mark dealer/blinds (will also be set from action_request game_state)
+    Object.values(state.players).forEach(p => {
+      p.isDealer = false; p.isSB = false; p.isBB = false;
+    });
+    if (state.players[msg.dealer_seat])      state.players[msg.dealer_seat].isDealer = true;
+    if (state.players[msg.small_blind_seat]) state.players[msg.small_blind_seat].isSB = true;
+    if (state.players[msg.big_blind_seat])   state.players[msg.big_blind_seat].isBB = true;
+
+    addLogDivider(`Hand #${msg.hand_number} — ${msg.small_blind_amount}/${msg.big_blind_amount}`);
+    renderAll();
+  },
+
+  action_request(msg) {
+    // Extract full spectator game_state with all hole cards visible
+    const gs = msg.game_state;
+    applyGameState(gs);
+    state.actorSeat = msg.actor_seat;
+    renderAll();
+  },
+
+  action_result(msg) {
+    const gs = msg.game_state;
+    applyGameState(gs);
+    state.actorSeat = null;
+
+    // Log the action
+    const action = msg.action;
+    let cls = 'act-' + action.type;
+    let text = action.type;
+    if (action.amount != null && (action.type === 'call' || action.type === 'raise')) {
+      text += ` ${action.amount}`;
+    }
+    if (msg.timed_out) { text += ' [timeout]'; cls = 'act-timeout'; }
+
+    addLogEntry(msg.player_name, msg.actor_seat, text, cls);
+    renderAll();
+  },
+
+  hand_end(msg) {
+    // Update stacks
+    msg.player_names.forEach((name, idx) => {
+      const seat = Object.keys(state.players).find(s => state.players[s].name === name);
+      if (seat !== undefined) state.players[seat].stack = msg.final_stacks[idx];
+    });
+
+    // Reveal showdown cards
+    if (msg.hole_cards_revealed && msg.hole_cards_revealed.length > 0) {
+      msg.hole_cards_revealed.forEach(p => {
+        if (state.players[p.seat]) state.players[p.seat].holeCards = p.hole_cards;
+      });
+    }
+
+    // Log winners
+    msg.winners.forEach(w => {
+      addLogEntry(w.name, w.seat, `won ${w.amount_won}`, 'act-raise');
+    });
+
+    // Mark eliminated
+    (msg.eliminated_seats || []).forEach(seat => {
+      if (state.players[seat]) {
+        state.players[seat].isActive = false;
+        state.players[seat].stack = 0;
+      }
+    });
+
+    state.communityCards = msg.community_cards || [];
+    renderAll();
+  },
+
+  game_end(msg) {
+    showOverlay(`${msg.winner} wins!`,
+      `Tournament over after ${msg.total_hands} hands.`);
+  },
+
+  error(msg) {
+    console.warn('Server error:', msg);
+  },
+};
+
+// =============================================================================
+// Apply game_state snapshot
+// =============================================================================
+function applyGameState(gs) {
+  if (!gs) return;
+  state.street = gs.street || state.street;
+  state.handNumber = gs.hand_number || state.handNumber;
+  state.communityCards = gs.community_cards || [];
+  state.pot = gs.pot?.total ?? state.pot;
+  state.sidePots = gs.pot?.pots ?? [];
+  state.actorSeat = gs.actor_seat ?? null;
+  state.sb = gs.small_blind_amount ?? state.sb;
+  state.bb = gs.big_blind_amount ?? state.bb;
+
+  // Update players from game_state players list
+  (gs.players || []).forEach(p => {
+    if (!state.players[p.seat]) {
+      state.players[p.seat] = {
+        name: p.name, stack: 0, holeCards: [], isActive: true,
+        isAllIn: false, bet: 0, isDealer: false, isSB: false, isBB: false,
+      };
+    }
+    const sp = state.players[p.seat];
+    sp.name    = p.name;
+    sp.stack   = p.stack;
+    sp.bet     = p.current_bet;
+    sp.isActive= p.is_active;
+    sp.isAllIn = p.is_all_in;
+    sp.isDealer= p.is_dealer;
+    sp.isSB    = p.is_small_blind;
+    sp.isBB    = p.is_big_blind;
+    if (p.hole_cards_known && p.hole_cards.length > 0 && !p.hole_cards.includes('??')) {
+      sp.holeCards = p.hole_cards;
+    }
+  });
+}
+
+// =============================================================================
+// Rendering
+// =============================================================================
+function renderAll() {
+  renderHeader();
+  renderCommunityCards();
+  renderPot();
+  renderSeats();
+}
+
+function renderHeader() {
+  el('badge-hand').textContent   = `Hand #${state.handNumber || '—'}`;
+  el('badge-street').textContent = state.street || '—';
+  el('badge-blinds').textContent = `${state.sb}/${state.bb}`;
+}
+
+function renderCommunityCards() {
+  const cc = el('community-cards');
+  cc.innerHTML = '';
+  if (state.communityCards.length === 0) {
+    cc.innerHTML = '<span style="color:#555;font-size:0.75rem;">No community cards</span>';
+    return;
+  }
+  state.communityCards.forEach(c => cc.appendChild(makeCard(c, 'community')));
+}
+
+function renderPot() {
+  el('pot-display').textContent = `Pot: ${state.pot.toLocaleString()}`;
+  const sp = el('side-pots');
+  if (state.sidePots.length > 1) {
+    sp.textContent = state.sidePots.map((p, i) => `Pot ${i+1}: ${p.amount}`).join('  ');
+  } else {
+    sp.textContent = '';
+  }
+}
+
+function renderSeats() {
+  const seats = Object.keys(state.players).map(Number);
+  seats.forEach(seat => {
+    const p = state.players[seat];
+    const div = document.getElementById(`seat-${seat}`);
+    if (!div) return;
+
+    // Active / folded
+    div.classList.toggle('folded', !p.isActive);
+    div.classList.toggle('active-actor', seat === state.actorSeat);
+
+    const box = div.querySelector('.seat-box');
+    box.classList.toggle('dealer-button', p.isDealer);
+
+    div.querySelector('.seat-name').textContent  = p.name;
+    div.querySelector('.seat-stack').textContent = p.stack.toLocaleString();
+    div.querySelector('.seat-bet').textContent   = p.bet > 0 ? `Bet: ${p.bet}` : '';
+
+    let role = '';
+    if (p.isDealer) role += 'D ';
+    if (p.isSB)     role += 'SB ';
+    if (p.isBB)     role += 'BB';
+    div.querySelector('.seat-role').textContent = role.trim();
+
+    div.querySelector('.seat-allin').textContent = p.isAllIn ? 'ALL-IN' : '';
+
+    // Hole cards
+    const cardsDiv = div.querySelector('.seat-cards');
+    cardsDiv.innerHTML = '';
+    if (!p.isActive) {
+      // folded — show nothing
+    } else if (p.holeCards.length === 2) {
+      p.holeCards.forEach(c => cardsDiv.appendChild(makeCard(c)));
+    } else if (p.isActive) {
+      // active but cards unknown (shouldn't happen for spectator)
+      cardsDiv.appendChild(makeBackCard());
+      cardsDiv.appendChild(makeBackCard());
+    }
+  });
+}
+
+// =============================================================================
+// Seat layout
+// =============================================================================
+function buildSeats() {
+  // Remove old seats
+  document.querySelectorAll('.seat').forEach(el => el.remove());
+
+  const felt = el('felt');
+  const seats = Object.keys(state.players).map(Number).sort((a, b) => a - b);
+  const n = seats.length;
+  const feltW = felt.offsetWidth  || 680;
+  const feltH = felt.offsetHeight || 380;
+  const cx = feltW / 2;
+  const cy = feltH / 2;
+  const rx = cx * 0.82;
+  const ry = cy * 0.80;
+
+  seats.forEach((seat, idx) => {
+    const angle = (idx / n) * 2 * Math.PI - Math.PI / 2;
+    const x = cx + rx * Math.cos(angle);
+    const y = cy + ry * Math.sin(angle);
+
+    const div = document.createElement('div');
+    div.className = 'seat';
+    div.id = `seat-${seat}`;
+    div.style.left = `${x}px`;
+    div.style.top  = `${y}px`;
+
+    div.innerHTML = `
+      <div class="seat-box">
+        <div class="seat-name">—</div>
+        <div class="seat-stack">—</div>
+        <div class="seat-bet"></div>
+        <div class="seat-role"></div>
+        <div class="seat-allin"></div>
+      </div>
+      <div class="seat-cards"></div>
+    `;
+    felt.appendChild(div);
+  });
+}
+
+// =============================================================================
+// Card helpers
+// =============================================================================
+const SUIT_SYMBOLS = { s: '♠', h: '♥', d: '♦', c: '♣' };
+const RED_SUITS    = new Set(['h', 'd']);
+
+function makeCard(cardStr, extraClass='') {
+  const rank = cardStr.slice(0, -1);
+  const suit = cardStr.slice(-1);
+  const sym  = SUIT_SYMBOLS[suit] || suit;
+  const isRed= RED_SUITS.has(suit);
+
+  const div = document.createElement('div');
+  div.className = `card ${isRed ? 'red' : 'black'} ${extraClass}`;
+  div.innerHTML = `<span>${rank}</span><span class="card-suit">${sym}</span>`;
+  return div;
+}
+
+function makeBackCard() {
+  const div = document.createElement('div');
+  div.className = 'card back';
+  return div;
+}
+
+// =============================================================================
+// Log helpers
+// =============================================================================
+function addLogEntry(name, seat, actionText, cls) {
+  const log = el('action-log');
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  entry.innerHTML = `<span class="actor">${escHtml(name)}</span>: <span class="${cls}">${escHtml(actionText)}</span>`;
+  log.appendChild(entry);
+  log.scrollTop = log.scrollHeight;
+}
+
+function addLogDivider(text) {
+  const log = el('action-log');
+  const div = document.createElement('div');
+  div.className = 'log-divider';
+  div.textContent = text;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+// =============================================================================
+// Lobby UI
+// =============================================================================
+function updateLobbyUI() {
+  el('lobby-info').textContent =
+    `${state.currentPlayers}/${state.maxPlayers} players (need ${state.minPlayers})`;
+  el('btn-start').disabled = state.currentPlayers < state.minPlayers || state.gameStarted;
+}
+
+function hideLobby() {
+  el('lobby-section').style.display = 'none';
+}
+
+// =============================================================================
+// Overlay
+// =============================================================================
+function showOverlay(title, body) {
+  el('overlay-title').textContent = title;
+  el('overlay-body').textContent  = body;
+  el('overlay').classList.remove('hidden');
+  setTimeout(() => el('overlay').classList.add('hidden'), 8000);
+}
+
+// =============================================================================
+// Misc helpers
+// =============================================================================
+function el(id) { return document.getElementById(id); }
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function setStatus(text, connected) {
+  const b = el('badge-status');
+  b.textContent = text;
+  b.classList.toggle('connected', connected);
+}
+function updateQueueCount() {
+  el('queue-count').textContent = `${eventQueue.length} event${eventQueue.length !== 1 ? 's' : ''} queued`;
+}
+
+// =============================================================================
+// Control wiring
+// =============================================================================
+el('btn-play').addEventListener('click', () => { paused = false; });
+el('btn-pause').addEventListener('click', () => { paused = true; });
+el('btn-step').addEventListener('click', () => {
+  paused = true;
+  if (eventQueue.length > 0) processNext();
+});
+
+el('speed-slider').addEventListener('input', function() {
+  delay = parseInt(this.value);
+  el('speed-val').textContent = `${delay} ms`;
+  startTimer();
+});
+
+el('btn-connect').addEventListener('click', () => {
+  connect(el('server-url').value.trim());
+});
+
+el('btn-start').addEventListener('click', () => {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({type: 'start'}));
+  }
+});
+
+el('overlay').addEventListener('click', () => el('overlay').classList.add('hidden'));
+
+// =============================================================================
+// Auto-connect on load
+// =============================================================================
+connect('ws://localhost:8765');
+</script>
+</body>
+</html>

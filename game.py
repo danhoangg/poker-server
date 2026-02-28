@@ -326,6 +326,78 @@ class PokerHand:
             "big_blind_amount": self.bb_amount,
         }
 
+    def get_spectator_game_state(self) -> dict:
+        """
+        Same as get_game_state() but every player's hole cards are fully
+        revealed.  Used exclusively for spectator connections so the observer
+        can see all hands simultaneously.
+        """
+        state = self.state
+
+        community_cards = [
+            repr(card)
+            for sublist in state.board_cards
+            for card in sublist
+        ]
+
+        total_pot = int(state.total_pot_amount)
+        pots_list = [
+            {
+                "amount": int(pot.amount),
+                "eligible_seats": [
+                    self.active_players[pk_i].seat_index
+                    for pk_i in pot.player_indices
+                ],
+            }
+            for pot in state.pots
+        ]
+
+        players = []
+        for pk_i, player in enumerate(self.active_players):
+            stack     = int(state.stacks[pk_i])
+            bet       = int(state.bets[pk_i])
+            is_active = bool(state.statuses[pk_i])
+            is_all_in = is_active and stack == 0
+
+            # All cards revealed for spectators
+            raw_cards  = state.hole_cards[pk_i]
+            hole_cards = [repr(c) for c in raw_cards] if raw_cards else []
+
+            players.append({
+                "seat": player.seat_index,
+                "name": player.name,
+                "stack": stack,
+                "current_bet": bet,
+                "is_active": is_active,
+                "is_all_in": is_all_in,
+                "is_dealer": pk_i == self.dealer_pk,
+                "is_small_blind": pk_i == self.sb_pk,
+                "is_big_blind": pk_i == self.bb_pk,
+                "hole_cards": hole_cards,
+                "hole_cards_known": True,
+            })
+
+        actor_pk   = state.actor_index
+        actor_seat = (
+            self.active_players[actor_pk].seat_index
+            if actor_pk is not None else None
+        )
+
+        return {
+            "street": self.current_street,
+            "hand_number": self.hand_number,
+            "community_cards": community_cards,
+            "pot": {"total": total_pot, "pots": pots_list},
+            "players": players,
+            "actor_seat": actor_seat,
+            "valid_actions": self.get_valid_actions(),
+            "dealer_seat": self.active_players[self.dealer_pk].seat_index,
+            "small_blind_seat": self.active_players[self.sb_pk].seat_index,
+            "big_blind_seat": self.active_players[self.bb_pk].seat_index,
+            "small_blind_amount": self.sb_amount,
+            "big_blind_amount": self.bb_amount,
+        }
+
     def get_hole_cards(self, seat_index: int) -> list[str]:
         """Return the two hole cards for one player as card strings e.g. ['As', 'Kd']."""
         pk_i = self._seat_to_pk(seat_index)

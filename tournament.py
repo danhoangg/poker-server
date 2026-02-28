@@ -36,6 +36,21 @@ _DISCONNECT_SENTINEL = object()
 
 
 @dataclass
+class SpectatorInfo:
+    websocket: object        # websockets ServerConnection
+    send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    async def send(self, msg: dict) -> None:
+        """Serialized send; silently ignores closed connections."""
+        import websockets
+        try:
+            async with self.send_lock:
+                await self.websocket.send(json.dumps(msg))
+        except (websockets.exceptions.ConnectionClosed, Exception):
+            pass
+
+
+@dataclass
 class PlayerInfo:
     websocket: object        # websockets ServerConnection
     name: str
@@ -59,10 +74,12 @@ class PlayerInfo:
 class TournamentManager:
     def __init__(self) -> None:
         self.players: list[PlayerInfo] = []   # all registered players, ordered by seat
+        self.spectators: list[SpectatorInfo] = []
         self.started: bool = False
         self.hand_number: int = 0
         self.dealer_seat: int = -1            # permanent seat of current dealer
         self._start_task: asyncio.Task | None = None
+        self._lobby_ready: asyncio.Event = asyncio.Event()  # set to force-start
 
     # ------------------------------------------------------------------
     # Player registration (called from server connection handler)
@@ -104,8 +121,10 @@ class TournamentManager:
         log.info("Player '%s' joined (seat %d). %d/%d players.",
                  name, seat, len(self.players), config.MAX_PLAYERS)
 
-        # Notify all connected players of the current lobby state
-        await self._broadcast(build_waiting(len(self.players), config.MIN_PLAYERS, config.MAX_PLAYERS))
+        # Notify all connected players and spectators of the current lobby state
+        waiting_msg = build_waiting(len(self.players), config.MIN_PLAYERS, config.MAX_PLAYERS)
+        await self._broadcast(waiting_msg)
+        await self._broadcast_spectators(waiting_msg)
 
         # Start immediately if full; schedule start if min reached
         if len(self.players) == config.MAX_PLAYERS:
@@ -129,15 +148,43 @@ class TournamentManager:
             pass
         log.info("Player '%s' disconnected.", player.name)
 
+    async def register_spectator(self, websocket) -> SpectatorInfo:
+        """Register a read-only spectator connection."""
+        spectator = SpectatorInfo(websocket=websocket)
+        self.spectators.append(spectator)
+        log.info("Spectator connected. Total spectators: %d", len(self.spectators))
+        return spectator
+
+    def remove_spectator(self, spectator: SpectatorInfo) -> None:
+        """Remove a spectator on disconnect."""
+        try:
+            self.spectators.remove(spectator)
+        except ValueError:
+            pass
+        log.info("Spectator disconnected. Total spectators: %d", len(self.spectators))
+
     # ------------------------------------------------------------------
     # Tournament lifecycle
     # ------------------------------------------------------------------
 
     async def _delayed_start(self) -> None:
-        log.info("Minimum players reached. Press enter to continue")
-        input()
+        log.info("Minimum players reached. Waiting for more players or force-start...")
+        await self._lobby_ready.wait()
         if not self.started:
             await self._start_tournament()
+
+    async def force_start(self) -> None:
+        """Force-start the tournament immediately (triggered by spectator UI)."""
+        if self.started:
+            return
+        if len(self.players) < config.MIN_PLAYERS:
+            log.warning("force_start called but not enough players (%d < %d).",
+                        len(self.players), config.MIN_PLAYERS)
+            return
+        log.info("Force-starting tournament via spectator UI.")
+        self._lobby_ready.set()
+        if self._start_task is None or self._start_task.done():
+            self._start_task = asyncio.create_task(self._start_tournament())
 
     async def _start_tournament(self) -> None:
         if self.started:
@@ -150,7 +197,9 @@ class TournamentManager:
         sb, bb = _get_blinds(0)
 
         log.info("Tournament starting with %d players.", len(self.players))
-        await self._broadcast(build_game_start(names, stacks, sb, bb))
+        game_start_msg = build_game_start(names, stacks, sb, bb)
+        await self._broadcast(game_start_msg)
+        await self._broadcast_spectators(game_start_msg)
 
         await self._run_tournament()
 
@@ -165,13 +214,15 @@ class TournamentManager:
 
         names = [p.name for p in self.players]
         stacks = [p.stack for p in self.players]
-        await self._broadcast(build_game_end(
+        game_end_msg = build_game_end(
             winner_name=winner.name if winner else "?",
             winner_seat=winner.seat_index if winner else -1,
             final_stacks=stacks,
             player_names=names,
             total_hands=self.hand_number,
-        ))
+        )
+        await self._broadcast(game_end_msg)
+        await self._broadcast_spectators(game_end_msg)
 
     async def _run_hand(self) -> None:
         active = self._active_players()     # sorted by seat_index
@@ -219,6 +270,21 @@ class TournamentManager:
                 hole_cards=hand.get_hole_cards(p.seat_index),
             ),
         )
+        # Spectators get a hand_start too — we send a version with all hole cards
+        # revealed via the spectator game state (sent as the first action_request).
+        # For the hand_start itself we send the same structural info with no hole cards
+        # (the UI will populate cards from the first action_request's spectator game_state).
+        await self._broadcast_spectators(build_hand_start(
+            hand_number=self.hand_number,
+            dealer_seat=self.dealer_seat,
+            small_blind_seat=sb_seat,
+            big_blind_seat=bb_seat,
+            small_blind_amount=sb,
+            big_blind_amount=bb,
+            player_names=player_names,
+            stacks=stacks,
+            hole_cards=[],
+        ))
 
         # Action loop
         while not hand.is_over:
@@ -235,10 +301,19 @@ class TournamentManager:
             # and are used to validate the bot's response.
             valid_actions = hand.get_valid_actions()
 
+            # Drain any stale messages from the actor's queue BEFORE broadcasting
+            # the action_request.  Draining after would race with a fast bot that
+            # responds before _get_action is entered.
+            while not actor_player.action_queue.empty():
+                actor_player.action_queue.get_nowait()
+
             # Send personalized action_request to every active player
             await self._broadcast_personalized(
                 active,
                 lambda p: build_action_request(actor_seat, hand.get_game_state(p.seat_index)),
+            )
+            await self._broadcast_spectators(
+                build_action_request(actor_seat, hand.get_spectator_game_state())
             )
 
             # Wait for actor's action (with timeout and server-side validation)
@@ -259,6 +334,14 @@ class TournamentManager:
                     game_state=hand.get_game_state(p.seat_index),
                 ),
             )
+            await self._broadcast_spectators(build_action_result(
+                actor_seat=actor_seat,
+                player_name=actor_player.name,
+                action_type=action_type,
+                amount=amount,
+                timed_out=timed_out,
+                game_state=hand.get_spectator_game_state(),
+            ))
 
         # Hand complete — collect results
         result = hand.get_hand_result()
@@ -275,7 +358,7 @@ class TournamentManager:
         all_names = [p.name for p in self.players]
         all_stacks = [p.stack for p in self.players]
 
-        await self._broadcast(build_hand_end(
+        hand_end_msg = build_hand_end(
             hand_number=self.hand_number,
             winners=result["winners"],
             hole_cards_revealed=result["hole_cards_revealed"],
@@ -283,7 +366,9 @@ class TournamentManager:
             final_stacks=all_stacks,
             player_names=all_names,
             eliminated_seats=newly_eliminated,
-        ))
+        )
+        await self._broadcast(hand_end_msg)
+        await self._broadcast_spectators(hand_end_msg)
 
     # ------------------------------------------------------------------
     # Action collection
@@ -303,10 +388,6 @@ class TournamentManager:
             (per protocol: "clamped server-side, so a slightly off value won't
             be rejected"), but a missing or non-numeric amount is rejected
         """
-        # Drain stale messages before waiting
-        while not player.action_queue.empty():
-            player.action_queue.get_nowait()
-
         try:
             msg = await asyncio.wait_for(
                 player.action_queue.get(),
@@ -381,6 +462,11 @@ class TournamentManager:
     ) -> None:
         """Send a per-player message built by builder(player)."""
         await asyncio.gather(*(p.send(builder(p)) for p in players))
+
+    async def _broadcast_spectators(self, msg: dict) -> None:
+        """Send a message to all connected spectators."""
+        if self.spectators:
+            await asyncio.gather(*(s.send(msg) for s in self.spectators))
 
     # ------------------------------------------------------------------
     # Utility

@@ -24,6 +24,10 @@ python example_bot.py --name Bot2
 
 The tournament starts automatically once 2 players have joined.  Up to 9 can play.
 
+**Optional: open the spectator UI**
+
+Open `spectator.html` in a browser to watch the game with all hole cards visible.  You can also click **Start Tournament** from the spectator view to begin the game manually.
+
 ---
 
 ## Files
@@ -32,6 +36,7 @@ The tournament starts automatically once 2 players have joined.  Up to 9 can pla
 |------|---------|
 | `example_bot.py` | **Start here.** Annotated bot covering every message type |
 | `human_bot.py` | Play interactively from the terminal |
+| `spectator.html` | Browser-based spectator UI — shows all cards face-up with playback controls |
 | `PROTOCOL.md` | Full protocol reference (all message schemas) |
 | `run.py` | Server entry point |
 
@@ -48,6 +53,11 @@ def decide_action(game_state: dict, my_seat: int) -> dict:
     # Your logic here.  Return one of the valid actions.
     ...
 ```
+
+Two optional callbacks let you track extra information across hands:
+
+- `user_action(actor_seat, action, game_state)` — fires after **every** player's action (not just your own); use it to build a full betting history for the hand
+- `showdown_cards(revealed, community_cards)` — fires at `hand_end` when cards go to showdown; the only place you can see opponents' actual hole cards
 
 ### The `game_state` object
 
@@ -215,6 +225,26 @@ You can also pass a full URI directly:
 ```bash
 python example_bot.py --name MyBot --host wss://myserver.example.com
 ```
+
+---
+
+## Spectator UI
+
+Open `spectator.html` in any browser to watch a tournament in real time.  It connects directly to the server and shows all players' hole cards face-up.
+
+**Controls:**
+
+| Control | Description |
+|---------|-------------|
+| **Play / Pause** | Start or stop draining the event queue |
+| **Step** | Advance one event at a time while paused |
+| **Speed slider** | Delay between events (0 ms = instant, 3000 ms = slow-motion) |
+| **Start Tournament** | Force-starts the tournament from the lobby (visible until the game begins) |
+| **Server URL + Connect** | Change the server address and reconnect |
+
+The UI buffers all incoming events in a queue and drains them at the configured speed.  You can pause at any point to inspect the table, then step through actions one by one.
+
+**Connecting to a remote server:** edit the Server URL field to `ws://your-host:8765` (or `wss://` for SSL) before clicking Connect.
 
 ---
 

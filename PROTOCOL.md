@@ -146,11 +146,12 @@ Broadcast at the beginning of each hand.
   "small_blind_amount": 100,
   "big_blind_amount": 200,
   "player_names": ["Alice", "Bob", "Charlie"],
-  "stacks": [8500, 11200, 10300]
+  "stacks": [8500, 11200, 10300],
+  "hole_cards": ["Ah", "Kd"]
 }
 ```
 
-`player_names` and `stacks` contain only active (non-eliminated) players in seat order.
+`player_names` and `stacks` contain only active (non-eliminated) players in seat order. `hole_cards` contains the receiving bot's own two cards — each bot receives a different version of this message. Cards are dealt and revealed at the start of the hand, before any action is requested.
 
 ---
 

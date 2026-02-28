@@ -306,6 +306,12 @@ class PokerHand:
             "big_blind_amount": self.bb_amount,
         }
 
+    def get_hole_cards(self, seat_index: int) -> list[str]:
+        """Return the two hole cards for one player as card strings e.g. ['As', 'Kd']."""
+        pk_i = self._seat_to_pk(seat_index)
+        raw = self.state.hole_cards[pk_i]
+        return [repr(c) for c in raw] if raw else []
+
     def get_hand_result(self) -> dict:
         """
         After is_over is True, return winners, hole cards, and final stacks.

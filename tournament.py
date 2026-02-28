@@ -132,8 +132,8 @@ class TournamentManager:
     # ------------------------------------------------------------------
 
     async def _delayed_start(self) -> None:
-        log.info("Minimum players reached. Starting in %ds...", config.LOBBY_WAIT_SECONDS)
-        await asyncio.sleep(config.LOBBY_WAIT_SECONDS)
+        log.info("Minimum players reached. Press enter to continue")
+        input()
         if not self.started:
             await self._start_tournament()
 
@@ -193,24 +193,29 @@ class TournamentManager:
         player_names = [p.name for p in active]
         stacks = [p.stack for p in active]
 
-        hand_start_msg = build_hand_start(
-            hand_number=self.hand_number,
-            dealer_seat=self.dealer_seat,
-            small_blind_seat=sb_seat,
-            big_blind_seat=bb_seat,
-            small_blind_amount=sb,
-            big_blind_amount=bb,
-            player_names=player_names,
-            stacks=stacks,
-        )
-        await self._broadcast(hand_start_msg)
-
+        # Create the hand first so hole cards are available for hand_start
         hand = PokerHand(
             active_players=active,
             dealer_pk=dealer_pk,
             sb_amount=sb,
             bb_amount=bb,
             hand_number=self.hand_number,
+        )
+
+        # Send each player a personalised hand_start with their own hole cards
+        await self._broadcast_personalized(
+            active,
+            lambda p: build_hand_start(
+                hand_number=self.hand_number,
+                dealer_seat=self.dealer_seat,
+                small_blind_seat=sb_seat,
+                big_blind_seat=bb_seat,
+                small_blind_amount=sb,
+                big_blind_amount=bb,
+                player_names=player_names,
+                stacks=stacks,
+                hole_cards=hand.get_hole_cards(p.seat_index),
+            ),
         )
 
         # Action loop

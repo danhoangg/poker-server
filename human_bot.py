@@ -17,6 +17,8 @@ import asyncio
 import json
 import logging
 import ssl
+import sys
+import threading
 
 import websockets
 
@@ -42,6 +44,64 @@ def fmt_cards(cards: list[str]) -> str:
     return "  ".join(fmt_card(c) for c in cards) if cards else "(none)"
 
 
+# ---------------------------------------------------------------------------
+# Single stdin reader thread
+# ---------------------------------------------------------------------------
+
+class _StdinReader:
+    """
+    One background thread reads stdin line-by-line and puts each line into
+    an asyncio queue.  Having exactly one thread avoids the 'stale thread'
+    problem: if a previous prompt timed out, the abandoned input() call would
+    compete with the next one for stdin and brick all future prompts.
+
+    Usage:
+        reader = _StdinReader(loop)
+        line = await reader.readline(timeout=29)  # raises TimeoutError on deadline
+        reader.drain()                             # discard buffered lines
+    """
+
+    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+        self._loop = loop
+        self._queue: asyncio.Queue[str | None] = asyncio.Queue()
+        t = threading.Thread(target=self._worker, daemon=True)
+        t.start()
+
+    def _worker(self) -> None:
+        while True:
+            try:
+                line = sys.stdin.readline()
+            except Exception:
+                line = ""
+            # None signals EOF; strip only the trailing newline
+            result: str | None = None if not line else line.rstrip("\n")
+            asyncio.run_coroutine_threadsafe(self._queue.put(result), self._loop)
+            if result is None:
+                break
+
+    def drain(self) -> None:
+        """Discard any lines buffered while nobody was waiting (e.g. after timeout)."""
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+    async def readline(self, timeout: float) -> str:
+        """
+        Wait up to `timeout` seconds for the next line.
+        Raises asyncio.TimeoutError on deadline, EOFError on EOF.
+        """
+        result = await asyncio.wait_for(self._queue.get(), timeout=timeout)
+        if result is None:
+            raise EOFError
+        return result
+
+
+# ---------------------------------------------------------------------------
+# Bot
+# ---------------------------------------------------------------------------
+
 class HumanBot:
     def __init__(self, name: str, host: str = "localhost", port: int = 8765) -> None:
         self.name = name
@@ -53,12 +113,15 @@ class HumanBot:
             self.uri = f"ws://{host}:{port}"
         self.log = logging.getLogger(f"bot.{name}")
         self.my_seat: int | None = None
+        self._stdin: _StdinReader | None = None
 
     # ------------------------------------------------------------------
     # Main loop
     # ------------------------------------------------------------------
 
     async def run(self) -> None:
+        self._stdin = _StdinReader(asyncio.get_running_loop())
+
         self.log.info("Connecting to %s as '%s'", self.uri, self.name)
         ssl_ctx = None
         if self.uri.startswith("wss://"):
@@ -99,11 +162,12 @@ class HumanBot:
 
         elif t == "hand_start":
             self.log.info(
-                "Hand #%d | Dealer seat %d | Blinds %d/%d",
+                "Hand #%d | Dealer seat %d | Blinds %d/%d | Your hand: %s",
                 msg["hand_number"],
                 msg["dealer_seat"],
                 msg["small_blind_amount"],
                 msg["big_blind_amount"],
+                fmt_cards(msg.get("hole_cards", [])),
             )
 
         elif t == "action_request":
@@ -171,9 +235,9 @@ class HumanBot:
 
         for p in gs["players"]:
             tags = []
-            if p["is_dealer"]:      tags.append("BTN")
-            if p["is_small_blind"]: tags.append("SB")
-            if p["is_big_blind"]:   tags.append("BB")
+            if p["is_dealer"]:        tags.append("BTN")
+            if p["is_small_blind"]:   tags.append("SB")
+            if p["is_big_blind"]:     tags.append("BB")
             if p["seat"] == self.my_seat: tags.append("YOU")
             tag_str = f"[{'/'.join(tags)}]" if tags else ""
 
@@ -201,23 +265,22 @@ class HumanBot:
 
     async def _prompt_action(self, gs: dict) -> dict:
         """
-        Print the available actions and read input from stdin without
-        blocking the event loop (uses run_in_executor for input()).
-        Loops until a valid action is entered or the 29-second deadline fires.
-
-        asyncio.shield() is used so that when wait_for raises TimeoutError the
-        underlying thread is not cancelled (threads cannot be killed in Python).
-        The thread will complete harmlessly after we have moved on.
+        Display the action menu and read one valid input from the single
+        stdin-reader thread.  Stale input from a previous timed-out prompt
+        is discarded before waiting.  A 29-second deadline fires before the
+        server's 30-second auto-fold, giving the user a clear message.
         """
-        valid = gs.get("valid_actions", [])
+        valid      = gs.get("valid_actions", [])
         valid_types = {a["type"] for a in valid}
 
-        loop = asyncio.get_running_loop()
-        # 29 s client-side: fires before the server's 30 s auto-fold so we
-        # can send an explicit fold and give the user a clear message.
+        # Discard any lines buffered while we were not waiting (e.g. the user
+        # pressed Enter after a previous timeout but before this prompt appeared)
+        self._stdin.drain()
+
+        loop     = asyncio.get_running_loop()
         deadline = loop.time() + 29
 
-        # Build menu lines
+        # Build and print the menu
         menu: list[str] = []
         for a in valid:
             if a["type"] == "fold":
@@ -228,17 +291,15 @@ class HumanBot:
                 menu.append(f"  c        call  {a['amount']}")
             elif a["type"] == "raise":
                 menu.append(f"  r <amt>  raise  (min {a['min_amount']}, max {a['max_amount']})")
-
         menu.append("  (29 seconds to act)")
         print("\n".join(menu))
 
         async def read_line(prompt: str) -> str:
-            """Await a line of stdin, raising TimeoutError if the deadline passes."""
             remaining = deadline - loop.time()
             if remaining <= 0:
                 raise asyncio.TimeoutError
-            future = loop.run_in_executor(None, input, prompt)
-            return await asyncio.wait_for(asyncio.shield(future), timeout=remaining)
+            print(prompt, end="", flush=True)
+            return await self._stdin.readline(timeout=remaining)
 
         while True:
             try:
@@ -275,7 +336,6 @@ class HumanBot:
                         print("  Amount must be a number.")
                         continue
                 else:
-                    # Prompt for amount separately
                     try:
                         amt_raw = await read_line(
                             f"  Raise to (min {min_r}, max {max_r}): "

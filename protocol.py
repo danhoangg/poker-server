@@ -80,6 +80,7 @@ def build_hand_start(
     big_blind_amount: int,
     player_names: list[str],
     stacks: list[int],
+    hole_cards: list[str],
 ) -> dict:
     return {
         "type": MSG_HAND_START,
@@ -91,6 +92,7 @@ def build_hand_start(
         "big_blind_amount": big_blind_amount,
         "player_names": player_names,
         "stacks": stacks,
+        "hole_cards": hole_cards,
     }
 
 

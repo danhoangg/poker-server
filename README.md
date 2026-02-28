@@ -112,6 +112,8 @@ Raise amounts outside `[min_amount, max_amount]` are clamped server-side, so sli
 
 You have **30 seconds** to respond.  Exceeding the limit results in an automatic fold.
 
+Any invalid actions (incorrect type, invalid amount) will also result in an automatic fold.
+
 ---
 
 ## Example Strategies
